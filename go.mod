@@ -1,4 +1,4 @@
-module github.com/katyamag/batch_token_demo
+module github.com/katyamag/hj2020cli
 
 go 1.14
 
