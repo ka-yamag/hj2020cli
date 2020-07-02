@@ -210,9 +210,9 @@ func main() {
 			Type:         uint32(typeOfBatchToken),
 		}
 
-		fmt.Println("Entry ---")
-		prettyPrint(pEntry)
-		fmt.Println("\n---")
+		// fmt.Println("Entry ---")
+		// prettyPrint(pEntry)
+		// fmt.Println("\n---")
 
 		mEntry, err := proto.Marshal(pEntry)
 		if err != nil {
@@ -226,7 +226,7 @@ func main() {
 		bEntry := base64.RawURLEncoding.EncodeToString(eEntry)
 		batchToken := fmt.Sprintf("b.%s", bEntry)
 
-		fmt.Printf("\n\n\tbatchToken = %+v\n", batchToken)
+		fmt.Printf("\n\nbatchToken = %+v\n", batchToken)
 	case "master-key":
 		masterKeyCmd.Parse(os.Args[2:])
 
