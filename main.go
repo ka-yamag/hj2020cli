@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	// termSize the number of bytes used for the key term.
+	// termSize the number of bytes used for the key term
 	termSize = 4
 
 	typeOfBatchToken = 2
@@ -37,6 +37,10 @@ type encodedKeyring struct {
 type key struct {
 	Term  uint32
 	Value []byte
+}
+
+type encryptedRawData struct {
+	Value []byte `json:"Value"`
 }
 
 func prettyPrint(s interface{}) {
@@ -100,18 +104,11 @@ func encrypt(path, key string, term uint32, plain []byte) ([]byte, error) {
 	return out, nil
 }
 
-func decrypt(aad, key string, cipher []byte) ([]byte, error) {
-	_key, err := base64.RawStdEncoding.DecodeString(key)
+func decrypt(aad string, key []byte, cipher []byte) ([]byte, error) {
+	gcm, err := generateAEADFromKey(key)
 	if err != nil {
 		return nil, err
 	}
-
-	gcm, err := generateAEADFromKey(_key)
-	if err != nil {
-		return nil, err
-	}
-
-	_key = nil
 
 	// Capture the parts
 	nonce := cipher[5 : 5+gcm.NonceSize()]
@@ -125,22 +122,31 @@ func decrypt(aad, key string, cipher []byte) ([]byte, error) {
 	return gcm.Open(out, nonce, raw, _aad)
 }
 
-func decryptKeyring(masterKey, path, aad string) (*encodedKeyring, error) {
+func decodeRawData(path string) (*encryptedRawData, error) {
 	bytes, err := ioutil.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
-
-	type encryptedRawKeyring struct {
-		Value []byte `json:"Value"`
-	}
-
-	var eKeyring encryptedRawKeyring
-	if err := jsonutil.DecodeJSON(bytes, &eKeyring); err != nil {
+	var data encryptedRawData
+	if err := jsonutil.DecodeJSON(bytes, &data); err != nil {
 		return nil, err
 	}
 
-	pKeyring, err := decrypt(aad, masterKey, eKeyring.Value)
+	return &data, nil
+}
+
+func decryptKeyring(masterKey string) (*encodedKeyring, error) {
+	d, err := decodeRawData(keyringFilePath)
+	if err != nil {
+		return nil, err
+	}
+
+	key, err := base64.RawStdEncoding.DecodeString(masterKey)
+	if err != nil {
+		return nil, err
+	}
+
+	pKeyring, err := decrypt(aadForKeyring, key, d.Value)
 	if err != nil {
 		return nil, err
 	}
@@ -163,7 +169,7 @@ func main() {
 	masterKeyCmd := flag.NewFlagSet("master-key", flag.ExitOnError)
 	masterKey := masterKeyCmd.String("key", "", "Base64 encoded Master key")
 	encryptedFilePath := masterKeyCmd.String("path", "", "file path")
-	aad := masterKeyCmd.String("aad", "", "aad for encrypted file")
+	aad := masterKeyCmd.String("aad", "", "additional authenticated data for specified file")
 
 	flag.Parse()
 
@@ -224,18 +230,40 @@ func main() {
 	case "master-key":
 		masterKeyCmd.Parse(os.Args[2:])
 
-		if *masterKey == "" || *encryptedFilePath == "" || *aad == "" {
+		if *masterKey == "" {
 			masterKeyCmd.PrintDefaults()
 			os.Exit(1)
 		}
 
-		keyring, err := decryptKeyring(*masterKey, *encryptedFilePath, *aad)
+		keyring, err := decryptKeyring(*masterKey)
 		if err != nil {
 			log.Fatal(err)
 		}
 		prettyPrint(keyring)
 
-		// TODO: decrypt file
+		if *encryptedFilePath == "" || *aad == "" {
+			return
+		}
+
+		// decrypt file
+		fmt.Printf("\n[+] target file: %s\n", *encryptedFilePath)
+		fmt.Printf("[+] additional authenticated data: %s\n\n", *aad)
+
+		d, err := decodeRawData(*encryptedFilePath)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		b, err := decrypt(*aad, keyring.Keys[0].Value, d.Value)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		var data map[string]interface{}
+		if err := jsonutil.DecodeJSON(b, &data); err != nil {
+			log.Fatal(err)
+		}
+		prettyPrint(data)
 	default:
 		fmt.Println("encryption-key")
 		encryptionKeyCmd.PrintDefaults()
