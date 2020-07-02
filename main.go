@@ -163,8 +163,9 @@ func decryptKeyring(masterKey string) (*encodedKeyring, error) {
 func main() {
 	encryptionKeyCmd := flag.NewFlagSet("encryption-key", flag.ExitOnError)
 	encryptionKey := encryptionKeyCmd.String("key", "", "Base64 encoded Encryption key")
+	filePath := encryptionKeyCmd.String("path", "", "file path")
+	aadForEcKey := encryptionKeyCmd.String("aad", "", "additional authenticated data for specified file")
 	entityId := encryptionKeyCmd.String("entity_id", "", "Vault's EntityID")
-	term := encryptionKeyCmd.Uint("active_term", 1, "Active term is used when specified encryption key")
 
 	masterKeyCmd := flag.NewFlagSet("master-key", flag.ExitOnError)
 	masterKey := masterKeyCmd.String("key", "", "Base64 encoded Master key")
@@ -185,48 +186,67 @@ func main() {
 	case "encryption-key":
 		encryptionKeyCmd.Parse(os.Args[2:])
 
-		if *encryptionKey == "" || *entityId == "" {
+		if *encryptionKey == "" || *filePath == "" {
 			encryptionKeyCmd.PrintDefaults()
 			os.Exit(1)
 		}
 
-		pEntry := &pb.TokenEntry{
-			Path: "auth/userpass/login/k",
-			Policies: []string{
-				"default",
-				"admin-policy",
-				"hoge-policy",
-			},
-			Meta: map[string]string{
-				"username": "katyamag",
-				"hogehoge": "fugafuga",
-				"piyopiyo": "gaogao",
-			},
-			DisplayName:  "katyamag-who-sold-the-vault-key",
-			CreationTime: time.Now().Unix(),
-			TTL:          int64(450000000000),
-			EntityID:     *entityId,
-			NamespaceID:  "root",
-			Type:         uint32(typeOfBatchToken),
-		}
-
-		// fmt.Println("Entry ---")
-		// prettyPrint(pEntry)
-		// fmt.Println("\n---")
-
-		mEntry, err := proto.Marshal(pEntry)
+		d, err := decodeRawData(*filePath)
 		if err != nil {
 			log.Fatal(err)
 		}
 
-		eEntry, err := encrypt("", *encryptionKey, uint32(*term), mEntry)
-		if err != nil {
-			log.Fatal(err)
-		}
-		bEntry := base64.RawURLEncoding.EncodeToString(eEntry)
-		batchToken := fmt.Sprintf("b.%s", bEntry)
+		term := binary.BigEndian.Uint32(d.Value[:4])
+		fmt.Printf("term = %+v\n", term)
 
-		fmt.Printf("\n\nbatchToken = %+v\n", batchToken)
+		if *entityId != "" {
+			fmt.Println("[+] Generate batch token")
+			pEntry := &pb.TokenEntry{
+				Path: "auth/userpass/login/k",
+				Policies: []string{
+					"default",
+					"admin-policy",
+					"hoge-policy",
+				},
+				Meta: map[string]string{
+					"username": "katyamag",
+					"hogehoge": "fugafuga",
+					"piyopiyo": "gaogao",
+				},
+				DisplayName:  "katyamag-who-sold-the-vault-key",
+				CreationTime: time.Now().Unix(),
+				TTL:          int64(450000000000),
+				EntityID:     *entityId,
+				NamespaceID:  "root",
+				Type:         uint32(typeOfBatchToken),
+			}
+
+			mEntry, err := proto.Marshal(pEntry)
+			if err != nil {
+				log.Fatal(err)
+			}
+
+			eEntry, err := encrypt("", *encryptionKey, term, mEntry)
+			if err != nil {
+				log.Fatal(err)
+			}
+			bEntry := base64.RawURLEncoding.EncodeToString(eEntry)
+			batchToken := fmt.Sprintf("b.%s", bEntry)
+
+			fmt.Printf("\n\nbatchToken = %+v\n", batchToken)
+		} else {
+			encKey, _ := base64.StdEncoding.DecodeString(*encryptionKey)
+			b, err := decrypt(*aadForEcKey, encKey, d.Value)
+			if err != nil {
+				log.Fatal(err)
+			}
+			var data map[string]interface{}
+			if err := jsonutil.DecodeJSON(b, &data); err != nil {
+				fmt.Printf("data = %+v\n", string(b))
+				return
+			}
+			prettyPrint(data)
+		}
 	case "master-key":
 		masterKeyCmd.Parse(os.Args[2:])
 
@@ -254,7 +274,8 @@ func main() {
 			log.Fatal(err)
 		}
 
-		b, err := decrypt(*aad, keyring.Keys[0].Value, d.Value)
+		term := binary.BigEndian.Uint32(d.Value[:4])
+		b, err := decrypt(*aad, keyring.Keys[term].Value, d.Value)
 		if err != nil {
 			log.Fatal(err)
 		}
